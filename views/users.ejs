@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maintain Users | Greg Project</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #172033; background: #f4f7fb; }
+    body { margin: 0; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem 5vw; background: white; border-bottom: 1px solid #dce3ed; }
+    main { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+    section { margin: 1.25rem 0; padding: 1.25rem; background: white; border: 1px solid #dce3ed; border-radius: 12px; }
+    form { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; }
+    label { display: grid; gap: .3rem; font-size: .9rem; }
+    input { padding: .6rem; border: 1px solid #9ba8ba; border-radius: 6px; }
+    button, a.button { display: inline-block; padding: .65rem .9rem; border: 0; border-radius: 6px; color: white; background: #174a7e; text-decoration: none; cursor: pointer; }
+    button.danger { background: #a52b37; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { padding: .65rem; text-align: left; vertical-align: top; border-bottom: 1px solid #e1e7ef; }
+    .row-form { display: flex; gap: .4rem; }
+    #status { min-height: 1.5rem; }
+    @media (max-width: 700px) { table { display: block; overflow-x: auto; } header { align-items: flex-start; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>Greg Project</strong>
+      <span> · Signed in as <%= adminUser.email %></span>
+    </div>
+    <div style="display:flex;gap:.6rem;align-items:center">
+      <a class="button" href="/">Back to Home</a>
+      <form action="/logout" method="post">
+        <button type="submit">Log out</button>
+      </form>
+    </div>
+  </header>
+
+  <main>
+    <h1>Maintain Users</h1>
+    <p>Manage user accounts in Supabase Authentication.</p>
+    <p id="status" role="status" aria-live="polite"></p>
+
+    <section>
+      <h2>Add a user</h2>
+      <form id="create-form">
+        <label>Email
+          <input name="email" type="email" required>
+        </label>
+        <label>Temporary password
+          <input name="password" type="password" minlength="6" required>
+        </label>
+        <label>Display name
+          <input name="display_name" type="text">
+        </label>
+        <button type="submit">Create user</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Existing users</h2>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr><th>Email</th><th>Display name</th><th>Created</th><th>Update</th><th>Delete</th></tr>
+          </thead>
+          <tbody id="user-rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const statusLine = document.getElementById("status");
+    const userRows = document.getElementById("user-rows");
+
+    function setStatus(message) {
+      statusLine.textContent = message;
+    }
+
+    // Use textContent for account data so user-provided values are shown as text.
+    function makeTextCell(value) {
+      const cell = document.createElement("td");
+      cell.textContent = value || "";
+      return cell;
+    }
+
+    async function sendJson(url, method, body) {
+      const response = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Request failed.");
+      return result;
+    }
+
+    async function loadUsers() {
+      setStatus("Loading users…");
+      try {
+        const response = await fetch("/api/users", { cache: "no-store" });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Could not load users.");
+
+        userRows.replaceChildren();
+        result.users.forEach((user) => {
+          const row = document.createElement("tr");
+          row.append(makeTextCell(user.email));
+          row.append(makeTextCell(user.user_metadata && user.user_metadata.display_name));
+          row.append(makeTextCell(user.created_at ? new Date(user.created_at).toLocaleDateString() : ""));
+
+          const updateCell = document.createElement("td");
+          const updateForm = document.createElement("form");
+          updateForm.className = "row-form";
+          updateForm.innerHTML =
+            '<input name="email" type="email" aria-label="Updated email" placeholder="Email">' +
+            '<input name="display_name" type="text" aria-label="Updated display name" placeholder="Display name">' +
+            '<input name="password" type="password" aria-label="New password" placeholder="New password (optional)">' +
+            '<button type="submit">Save</button>';
+          updateForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const formData = new FormData(updateForm);
+            const body = {};
+            for (const [key, value] of formData.entries()) {
+              if (value.trim()) body[key] = value.trim();
+            }
+            try {
+              await sendJson("/api/users/" + encodeURIComponent(user.id), "PATCH", body);
+              setStatus("User updated.");
+              await loadUsers();
+            } catch (error) {
+              setStatus(error.message);
+            }
+          });
+          updateCell.append(updateForm);
+          row.append(updateCell);
+
+          const deleteCell = document.createElement("td");
+          const deleteButton = document.createElement("button");
+          deleteButton.type = "button";
+          deleteButton.className = "danger";
+          deleteButton.textContent = "Delete";
+          deleteButton.addEventListener("click", async () => {
+            if (!window.confirm("Delete " + (user.email || "this user") + "?")) return;
+            try {
+              await sendJson("/api/users/" + encodeURIComponent(user.id), "DELETE");
+              setStatus("User deleted.");
+              await loadUsers();
+            } catch (error) {
+              setStatus(error.message);
+            }
+          });
+          deleteCell.append(deleteButton);
+          row.append(deleteCell);
+          userRows.append(row);
+        });
+
+        setStatus("Showing " + result.users.length + " users.");
+      } catch (error) {
+        setStatus(error.message);
+      }
+    }
+
+    // Submit new account details to the protected create-user route.
+    document.getElementById("create-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const formData = new FormData(form);
+      const body = Object.fromEntries(formData.entries());
+      try {
+        await sendJson("/api/users", "POST", body);
+        form.reset();
+        setStatus("User created.");
+        await loadUsers();
+      } catch (error) {
+        setStatus(error.message);
+      }
+    });
+
+    loadUsers();
+  </script>
+</body>
+</html>
+
+
